@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Flash Rtmp Publisher</title>
+  <script type="text/javascript" src="swfobject.js"></script>
+    <script type="text/javascript">
+
+      // url parameters
+      // get params from href (url, stream name)
+      // e.g. ?streamurl=rtmp://server.com/live&streamname=mystream
+      // url = urlparams.get("streamurl")
+      // name = urlparams.get("streamname")
+      var urlparams = {};
+      if(URLSearchParams) {
+        urlparams = new URLSearchParams(location.search);
+      } else {
+        urlparams.get = function(name) {
+            name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+            var regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+            var results = regex.exec(location.search);
+            return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+        };
+      }
+
+      console.log("starting...");
+
+      // default stream parameters
+      // NOTE: you need to obtain valid stream info from bintu
+      var streamurl = "rtmp://bintu-stream.nanocosmos.de/live";
+      //var streamurl = "rtmp://bintu-atrans.nanocosmos.de/atrans";
+      var streamname = "XXXXX-YYYYY";
+      var vbitrate = 500; // max. kbits/s
+      var acodec = "speex";
+      //acodec = "nellymoser";
+      //acodec = "pcma";
+
+      streamurl = urlparams.get("streamurl") || streamurl;
+      streamname = urlparams.get("streamname") || streamname;
+
+      var acodec = urlparams.get("acodec") || acodec;
+      var vbitrate = urlparams.get("vbitrate") || vbitrate;
+      var dynamicResolution = urlparams.get("dynamicResolution") || 0;
+
+      var disablevideo = urlparams.get("disablevideo") || false;
+      var disableaudio = urlparams.get("disableaudio") || false;
+
+      embedFlashBroadcaster(streamurl, streamname, acodec, vbitrate, disablevideo, disableaudio, dynamicResolution);
+
+      function embedFlashBroadcaster(streamurl, streamname, acodec, vbitrate, disablevideo, disableaudio, dynamicResolution) {
+        var flashVars = {
+          //streamer: 'rtmp://localhost/myapp',
+          streamer: streamurl,
+          //file: streamname,
+          streamname: streamname,
+          acodec: acodec,
+          vcodec: "h264",
+          vbitrate: vbitrate,
+          disablevideo: disablevideo,
+          disableaudio: disableaudio,
+          dynamicResolution: dynamicResolution
+        };
+        console.log("flashVars:");
+        console.log(flashVars);
+
+        // embed flash object
+        swfobject.embedSWF("RtmpPublisher.swf", "rtmp-publisher", "640", "480", "9.0.0", null, flashVars);
+      }
+
+    </script>
+</head>
+<body>
+    <div id="rtmp-publisher">
+      <p>Flash not embedded</p>
+    </div>
+</body>
+</html>

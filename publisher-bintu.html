@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flash Rtmp Publisher for nanoStream / bintu</title>
+    <script src="swfobject.js"></script>
+    <script src="https://demo.nanocosmos.de/nanoplayer/release/js/multi/nano.bintu.js"></script>
+    <script>
+
+      // url parameters
+      // get params from href (url, stream name)
+      // e.g. ?streamurl=rtmp://server.com/live&streamname=mystream
+      // url = urlparams.get("streamurl")
+      // name = urlparams.get("streamname")
+      var urlparams = {};
+      if(URLSearchParams) {
+        urlparams = new URLSearchParams(location.search);
+      } else {
+        urlparams.get = function(name) {
+            name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+            var regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+            var results = regex.exec(location.search);
+            return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+        };
+      }
+
+      console.log("starting...");
+
+      // set the bintu api key here or via url param ?apikey=....
+      var apikey = urlparams.get("apikey");
+
+      // default stream parameters
+      // NOTE: you need to obtain valid stream info from bintu
+      var streamurl = "rtmp://bintu-stream.nanocosmos.de/live";
+      //var streamurl = "rtmp://bintu-atrans.nanocosmos.de/atrans";
+      var streamname = "XXXXX-YYYYY";
+      var vbitrate = 800; // max. kbits/s
+      var acodec = "speex";
+      //acodec = "nellymoser";
+      //acodec = "pcma";
+
+      streamurl = urlparams.get("streamurl") || streamurl;
+      streamname = urlparams.get("streamname") || streamname;
+
+      var acodec = urlparams.get("acodec") || acodec;
+      var vbitrate = urlparams.get("vbitrate") || vbitrate;
+      var dynamicResolution = urlparams.get("dynamicResolution") || 0;
+
+      var disablevideo = urlparams.get("disablevideo") || false;
+      var disableaudio = urlparams.get("disableaudio") || false;
+
+      var bintu, bintuTags, playoutURL;
+      var apiurl="https://bintu.nanocosmos.de";
+
+      // Initialize Bintu to obtain a live stream 
+      nano_init = function() {
+        // Initialize Bintu to obtain a live stream
+        //bintu = new Bintu(apikey, apiurl, true, false);
+        bintu = new Bintu(apiurl, apikey);
+        bintuTags = ['camera1, test, flash']; // Optionally add tags to the stream
+        playoutURL = '';
+        nano_createStream();
+      };
+
+        nano_createStream = function() {
+            logStatus("Creating a new Bintu stream");
+            bintu.createStream(bintuTags, function success(request) {
+                var response = JSON.parse(request.responseText);
+                if(!(response&&response.ingest)) {
+                  //error
+                  return;
+                }
+                streamurl = response.ingest.rtmp.url;
+
+                //Flash-specific ingest (audio transcoding)
+                streamurl = "rtmp://bintu-atrans.nanocosmos.de/atrans";
+
+                streamname = response.ingest.rtmp.streamname;
+                playoutURL = 'https://demo.nanocosmos.de/nanoplayer/release/nanoplayer.html?bintu.apiurl=' + apiurl + '&bintu.streamid=' + response.id;
+                logStatus('Bintu Stream Created - Ingest: '+streamurl+'/'+streamname + ' - player: ' + playoutURL);
+                setPlayer(playoutURL);
+                embedFlashBroadcaster(streamurl, streamname, acodec);
+            }, function onerror(result) {
+                if (result.request && result.request.response)
+                    logStatus(result.request.response);
+                else {
+                    logStatus(result.error);
+                    alert(result.error);
+                }
+            });
+        };
+
+        // start broadcast to bintu / nanoStream Cloud
+
+        nano_startBroadcast = function() {
+            if (!ingest) {
+                showError("no ingest stream url");
+                return;
+            }
+        };
+
+        function embedFlashBroadcaster(streamurl, streamname, acodec, vbitrate, disablevideo, disableaudio, dynamicResolution) {
+          var flashVars = {
+            //streamer: 'rtmp://localhost/myapp',
+            streamer: streamurl,
+            //file: streamname,
+            streamname: streamname,
+            acodec: acodec,
+            vcodec: "h264",
+            vbitrate: vbitrate,
+            disablevideo: disablevideo,
+            disableaudio: disableaudio,
+            dynamicResolution: dynamicResolution
+          };
+          console.log("flashVars:");
+          console.log(flashVars);
+
+          // embed flash object
+          swfobject.embedSWF("RtmpPublisher.swf", "rtmp-publisher", "640", "480", "9.0.0", null, flashVars);
+        }
+
+        logStatus = function(msg) {
+            document.getElementById("status").textContent = msg;
+            console.log(msg);
+        };
+
+        setPlayer = function(msg) {
+            document.getElementById("player").html = '<a href="'+msg+'"</a>';
+            console.log(msg);
+        };
+
+    </script>
+</head>
+<body>
+    <h1>nanoStream Cloud / bintu.live / H5Live</h1>
+    <h2>minimal broadcast sample for Flash broadcaster</h2>
+
+    <div id="rtmp-publisher">
+        <p>Flash not embedded</p>
+    </div>
+    <hr>
+    <span id="status">stopped</span>
+    <span id="player"></span>
+
+    <script>
+      nano_init();
+    </script>
+
+
+</body>
+</html>

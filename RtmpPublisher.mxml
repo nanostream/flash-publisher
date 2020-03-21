@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009"
+			   xmlns:s="library://ns.adobe.com/flex/spark"
+			   xmlns:mx="library://ns.adobe.com/flex/mx"
+			   minWidth="500" minHeight="350" creationComplete="init()">
+
+	<fx:Script>
+		<![CDATA[
+
+			// RtmpPublisher.mxml
+			// (c) 2017 nanocosmos gmbh
+			// based on sample code by nginx-rtmp
+
+			import mx.controls.Alert;
+			import mx.core.FlexGlobals;
+			import mx.events.FlexEvent;
+			import spark.skins.spark.PanelSkin;
+
+			// parameters
+			private var streamer:String;
+			private var streamname:String;
+			private var acodec:String = "speex";
+			private var vcodec:String = "h264";
+            
+            // The requested rate at which the camera should capture data, 
+            // in frames per second. The default value is 15.
+            private var fps:Number = 15; 
+            
+			private var disablevideo:String;
+			private var disableaudio:String;
+
+			// netstream h264 quality
+			// Warning: quality 100 can go up to 3.5 Mbit/s for 640x480
+			private var vbitrate:int = 1100;  // 1100 kbits/s
+			private var vquality:int = 0;
+
+			private var camera:Camera;
+			private var localCam:Video;
+			private var microphone:Microphone;
+			private var connection:NetConnection;
+			private var stream:NetStream;
+			private var h264Settings:H264VideoStreamSettings;
+			
+			// for resolution change
+			private const resolution:Array = [{w:640, h:480}, {w:320,h:240}];
+			private var resolutionIndex:int = 0;
+			private var currentRes:Object = resolution[resolutionIndex];
+			
+			private var cameraAccessible:Boolean = false;
+			private var microphoneAccessible:Boolean = false;
+			
+			private function onChangeResolutionClick(event:MouseEvent):void {
+				resolutionIndex ^= 1;
+				currentRes = resolution[resolutionIndex];
+				trace("Resolution changed:", currentRes.w, currentRes.h);
+				setupCamera(currentRes);
+				localCam.width = currentRes.w;
+				localCam.height = currentRes.h;
+				
+				//FIXME sendMetaData?
+				sendMetadata(stream);
+			}
+
+			// connect rtmp stream to server (streamer = rtmp://server/live)
+			// stream is published with stream.publish(streamname) after connection
+			private function publishButtonListener(event:MouseEvent):void {
+				if(publishButton.label == 'Publish') {
+					publishButton.label = 'Stop';
+					// required: use AMF0 for meta data
+					// http://help.adobe.com/de_DE/FlashPlatform/reference/actionscript/3/flash/net/NetConnection.html#objectEncoding
+					NetConnection.defaultObjectEncoding = flash.net.ObjectEncoding.AMF0;
+					connection = new NetConnection();
+					connection.objectEncoding = flash.net.ObjectEncoding.AMF0;
+					//Alert.show("Connecting: "+streamer);
+					connection.connect(streamer);
+					connection.addEventListener(NetStatusEvent.NET_STATUS, netStatusHander);
+					connection.addEventListener(AsyncErrorEvent.ASYNC_ERROR, netAsyncErrorHandler);
+				} else {
+					publishButton.label = 'Publish';
+					stream.close();
+					connection.close();
+					stream = null;
+					connection = null;
+				}
+			}
+
+			// https://helpx.adobe.com/adobe-media-server/dev/adding-metadata-live-stream.html
+			private function sendMetadata(stream:NetStream):void {
+				trace("sendMetaData() called")
+				var metaData:Object = new Object();
+				
+				metaData.hasVideo = false;
+				metaData.hasAudio = false;
+
+				if(cameraAccessible == true) {
+					metaData.hasVideo = true;
+					metaData.width = camera.width;
+					metaData.height = camera.height;
+					metaData.framerate = camera.fps;
+					metaData.videodatarate = vbitrate;
+				
+					metaData.videocodecid = 'avc1';	// 7
+				}
+				
+				if(microphoneAccessible == true) {
+					metaData.hasAudio = true;
+					metaData.audiodatarate = 20; // for encoding quality 6 the bitrate is 20.6 kbits/s
+					//metaData.audiosamplesize = 16;
+					//metaData.audiochannels = 2;
+					//metaData.stereo = true;
+					
+					metaData.audiocodecid = acodec;	//'speex';	// 11
+				}
+
+				// FIXME: outdated/wrong:
+				//metaData.codec = stream.videoStreamSettings.codec;
+				//metaData.profile =  h264Settings.profile;
+				//metaData.level = h264Settings.level;
+				//metaData.fps = camera.fps;
+				//metaData.bandwith = camera.bandwidth;
+				//metaData.bitrate = vbitrate;
+				//metaData.height = camera.height;
+				//metaData.width = camera.width;
+				//metaData.keyFrameInterval = camera.keyFrameInterval;
+				
+				if(cameraAccessible == true) {
+					if(microphoneAccessible == true) {
+						metaData.videoonly = false;
+						metaData.audioonly = false;
+					}
+					else {
+						metaData.videoonly = true;
+						metaData.audioonly = false;
+					}
+				}
+				else {
+					if(microphoneAccessible == true) {
+						metaData.videoonly = false;
+						metaData.audioonly = true;
+					}
+					else {	// is this case possible?
+						metaData.videoonly = true;
+						metaData.audioonly = true;
+					}
+				}
+
+				metaData.title = "nanoStream";
+
+				stream.send( "@setDataFrame", "onMetaData", metaData);
+				var jstring:String = JSON.stringify(metaData);
+				//Alert.show("metaData "+jstring);
+     			}
+
+			private function publishCamera():void {
+				stream = new NetStream(connection);
+				stream.addEventListener(NetStatusEvent.NET_STATUS, netStatusHander);
+				stream.addEventListener(AsyncErrorEvent.ASYNC_ERROR, netAsyncErrorHandler);
+				stream.attachCamera(camera);
+				stream.attachAudio(microphone);
+				h264Settings = new H264VideoStreamSettings();
+				//h264Settings.setProfileLevel(H264Profile.BASELINE, H264Level.LEVEL_3_1);
+				h264Settings.setProfileLevel(H264Profile.MAIN, H264Level.LEVEL_3_1);
+				stream.videoStreamSettings = h264Settings;
+				stream.publish(streamname, 'live');
+			}
+
+			private function netStatusHander(event:NetStatusEvent):void {
+				switch(event.info.code) {
+					case 'NetConnection.Connect.Success':
+						publishCamera();
+						break;
+					case "NetStream.Publish.Start":
+						sendMetadata(stream);
+						break;
+					default:
+						Alert.show("netStatusHander "+event.info.code);
+						break;
+				}
+			}
+
+			private function netAsyncErrorHandler(event:NetStatusEvent):void {
+				Alert.show("AsyncError");
+			}
+			
+			private function camera_status(evt:StatusEvent):void {
+                switch (evt.code) {
+                    case "Camera.Muted":
+                        Alert.show("User denied access to camera.");
+                        cameraAccessible = false;
+                        break;
+                    case "Camera.Unmuted":
+                        //Alert.show("User allowed access to camera.");
+                        cameraAccessible = true;
+                        break;
+                }
+            }
+			
+			private function microphone_status(evt:StatusEvent):void {
+                switch (evt.code) {
+                    case "Microphone.Muted":
+                        Alert.show("User denied access to microphone.");
+                        microphoneAccessible = false;
+                        break;
+                    case "Microphone.Unmuted":
+                        //Alert.show("User allowed access to microphone.");
+                        microphoneAccessible = true;
+                        break;
+                }
+            }
+			
+			private function setupCamera(cfg:Object):void {
+				if(disablevideo == 'false') {
+					camera = Camera.getCamera();
+
+					if(camera) {
+						// cam resolution and fps
+                        // https://help.adobe.com/en_US/FlashPlatform/reference/actionscript/3/flash/media/Camera.html#setMode()
+                        camera.setMode(cfg.w, cfg.h, fps, false);
+						
+						// Video bandwidth/quality
+						// To indicate that bandwidth use takes precedence,
+						// pass a value for bandwidth and 0 for quality.
+						// The runtime transmits video at the highest quality possible
+						// within the specified bandwidth.
+						// If necessary, the runtime reduces picture quality
+						// to avoid exceeding the specified bandwidth.
+						// In general, as motion increases, quality decreases.
+
+						var bandwidth:int = vbitrate * 1000 / 8; // bytes/s
+						var quality:int = vquality;
+						camera.setQuality(bandwidth, quality);
+					}
+				}
+			}
+
+			private function init():void {
+
+                // Log parameters
+                var myObj:Object = FlexGlobals.topLevelApplication.parameters;
+                
+				var s:String = "Parameters: \n";
+                for (var i:String in myObj) { 
+                    s = s + i + ": " + myObj[i] + "\n";
+                    //trace(i + ": " + myObj[i]);
+                    //Alert.show(i + ": " + myObj[i]);
+                } 
+                trace(s);
+                //Alert.show(s);
+            
+				streamer = FlexGlobals.topLevelApplication.parameters.streamer;
+				if(streamer == null) {
+					Alert.show('Missing flashvars: streamer');
+					return;
+				}
+
+				streamname = FlexGlobals.topLevelApplication.parameters.streamname||FlexGlobals.topLevelApplication.parameters.file;
+				if(streamname == null) {
+					Alert.show('Missing flashvars: streamname');
+					return;
+				}
+				
+				disablevideo = FlexGlobals.topLevelApplication.parameters.disablevideo;
+				if(disablevideo != null && disablevideo == 'true') {
+					disablevideo = 'true';
+					Alert.show('Disabling Video');
+				}
+				else {
+					disablevideo = 'false';
+				}
+				
+				disableaudio = FlexGlobals.topLevelApplication.parameters.disableaudio;
+				if(disableaudio != null && disableaudio == 'true') {
+					disableaudio = 'true';
+					Alert.show('Disabling Audio');
+				}
+				else {
+					disableaudio = 'false';
+				}
+
+				acodec = FlexGlobals.topLevelApplication.parameters.acodec || acodec;
+
+				vbitrate = FlexGlobals.topLevelApplication.parameters.vbitrate || vbitrate;
+				vquality = FlexGlobals.topLevelApplication.parameters.vquality || vquality;
+                fps = FlexGlobals.topLevelApplication.parameters.fps || fps;
+                
+                s = 'streamer: '+streamer 
+				  + ' - streamname: '+streamname 
+				  + ' - acodec: '+acodec 
+                  + ' - vcodec: '+vcodec
+                  + ' - vbitrate: '+vbitrate
+                  + ' - fps: '+fps;
+                Alert.show(s);    
+                
+				publishButton.addEventListener(MouseEvent.CLICK, publishButtonListener);
+            
+                resolutionButton.enabled=false;
+            if(FlexGlobals.topLevelApplication.parameters.dynamicResolution==1) resolutionButton.enabled=true;
+				resolutionButton.addEventListener(MouseEvent.CLICK, onChangeResolutionClick); 
+
+				setupCamera(currentRes);
+				
+				if(camera) {
+					camera.addEventListener(StatusEvent.STATUS, camera_status);
+					
+					//videoDisplay.attachCamera(camera);
+					localCam = new Video(640,480);
+					localCam.attachCamera(camera);
+					videoDisplay.addChild(localCam);
+				}
+
+				if(disableaudio == 'false') {
+					microphone = Microphone.getMicrophone();
+					
+					if(microphone) {
+						microphone.addEventListener(StatusEvent.STATUS, microphone_status);
+						
+						// Sets the minimum input level that should be considered sound and
+						// When using the Speex codec, Adobe recommends that you set the silence level to 0.
+						microphone.setSilenceLevel(0);
+
+						microphone.codec = acodec;
+
+						// The encoded speech quality when using the Speex codec.
+						// Possible values are from 0 to 10. The default value is 6 = 20.6 kbps
+						microphone.encodeQuality = 6;
+					}
+				}
+			}
+		]]>
+	</fx:Script>
+	<s:BorderContainer x="0" y="0" width="100%" height="100%">
+		<s:VideoDisplay width="100%" height="100%" id="videoDisplay"></s:VideoDisplay>
+		<s:Button label="Publish" id="publishButton" horizontalCenter="0" bottom="10"></s:Button>
+		<s:Button label="Resolution" id="resolutionButton" horizontalCenter="0" bottom="40"></s:Button>
+	</s:BorderContainer>
+</s:Application>
